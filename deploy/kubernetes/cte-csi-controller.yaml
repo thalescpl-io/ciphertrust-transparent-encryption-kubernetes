@@ -1,0 +1,101 @@
+---
+kind: StatefulSet
+apiVersion: apps/v1
+metadata:
+  name: cte-csi-controller
+spec:
+  serviceName: "cte-csi-controller"
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cte-csi-controller
+  template:
+    metadata:
+      labels:
+        app: cte-csi-controller
+    spec:
+      serviceAccountName: cte-csi-controller
+      volumes:
+        - name: registration-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins_registry/
+            type: Directory
+
+        - name: plugin-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins/cte.csi/
+            type: DirectoryOrCreate
+
+        - name: kube-cred
+          hostPath:
+            path: /etc/kubernetes/
+            type: Directory
+
+      containers:
+        - name: cte-csi
+          #image: gitlabent.thalesesec.com:5050/agents/core-dev/cte-k8-builder/cte_csi
+          image: registry-1.docker.io/thalesgroup/ciphertrust-transparent-encryption:cte_csi
+          imagePullPolicy: Always
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "rm -rf /csi/csi-controller.sock"]
+          args:
+            - "--endpoint=$(CSI_ENDPOINT)"
+            - "--nodeid=$(KUBE_NODE_NAME)"
+            - "--namespace=$(KUBE_NAMESPACE)"
+            - "--v=5"
+          env:
+            - name: CSI_ENDPOINT
+              value: unix:///csi/csi-controller.sock
+            - name: KUBE_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: spec.nodeName
+            - name: KUBE_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          securityContext:
+            privileged: true
+            capabilities:
+              add:
+                - SYS_ADMIN
+          volumeMounts:
+            - name: plugin-dir
+              mountPath: /csi
+            - name: kube-cred
+              mountPath: /etc/kubernetes/
+
+        - name: csi-provisioner
+          #image: gitlabent.thalesesec.com:5050/agents/core-dev/cte-k8-builder/csi-provisioner
+          image: registry-1.docker.io/thalesgroup/ciphertrust-transparent-encryption:csi-provisioner
+          imagePullPolicy: Always
+          args:
+            - "-v=5"
+            - "--csi-address=/csi/csi-controller.sock"
+            - "--feature-gates=Topology=false"
+          securityContext:
+            # This is necessary only for systems with SELinux, where
+            # non-privileged sidecar containers cannot access unix domain socket
+            # created by privileged CSI driver container.
+            privileged: true
+          env:
+            - name: CSI_ENDPOINT
+              value: unix:///csi/csi-controller.sock
+            - name: KUBE_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: spec.nodeName
+            - name: KUBE_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          volumeMounts:
+            - mountPath: /csi
+              name: plugin-dir
+
+      imagePullSecrets:
+        - name: cte-csi-secret

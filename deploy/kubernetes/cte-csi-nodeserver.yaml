@@ -1,0 +1,129 @@
+---
+kind: DaemonSet
+apiVersion: apps/v1
+metadata:
+  name: cte-csi-node
+spec:
+  selector:
+    matchLabels:
+      app: cte-csi-node
+  template:
+    metadata:
+      labels:
+        app: cte-csi-node
+    spec:
+      hostPID: true
+      serviceAccountName: cte-csi-node
+      volumes:
+        - name: registration-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins_registry/
+            type: Directory
+
+        - name: plugin-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins/cte.csi/
+            type: DirectoryOrCreate
+
+        - name: mountpoint-dir
+          hostPath:
+            path: /var/lib/kubelet/pods
+            type: DirectoryOrCreate
+
+        - name: kube-cred
+          hostPath:
+            path: /etc/kubernetes/
+            type: Directory
+
+        - name: dshm
+          emptyDir:
+            medium: Memory
+
+        - name: varlog
+          emptyDir: {}
+
+        - name: chroot
+          emptyDir: {}
+
+      containers:
+        - name: cte-csi
+          #image: gitlabent.thalesesec.com:5050/agents/core-dev/cte-k8-builder/cte_csi
+          image: registry-1.docker.io/thalesgroup/ciphertrust-transparent-encryption:cte_csi
+          imagePullPolicy: Always
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "rm -rf /csi/csi.sock"]
+          env:
+            - name: CSI_ENDPOINT
+              value: unix:///csi/csi.sock
+            - name: KUBE_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: spec.nodeName
+            - name: KUBE_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          args:
+            - "--endpoint=$(CSI_ENDPOINT)"
+            - "--nodeid=$(KUBE_NODE_NAME)"
+            - "--namespace=$(KUBE_NAMESPACE)"
+            - "--v=5"
+          securityContext:
+            privileged: true
+            capabilities:
+              add:
+                - SYS_ADMIN
+          volumeMounts:
+            - name: plugin-dir
+              mountPath: /csi
+            - name: mountpoint-dir
+              mountPath: /var/lib/kubelet/pods
+              mountPropagation: Bidirectional
+            - name: kube-cred
+              mountPath: /etc/kubernetes/
+            - name: dshm
+              mountPath: /dev/shm
+            - name: varlog
+              mountPath: /var/log
+            - name: chroot
+              mountPath: /chroot
+
+        - name: cte-agent-logs
+          #image: gitlabent.thalesesec.com:5050/agents/core-dev/cte-k8-builder/cte-csi-logger
+          image: registry-1.docker.io/thalesgroup/ciphertrust-transparent-encryption:cte-csi-logger
+          volumeMounts:
+            - name: varlog
+              mountPath: /var/log
+            - name: chroot
+              mountPath: /chroot
+
+        - name: csi-sidecar-registrar
+          image: k8s.gcr.io/sig-storage/csi-node-driver-registrar:v2.0.1
+          args:
+            - "--csi-address=/csi/csi.sock"
+            - "--kubelet-registration-path=/var/lib/kubelet/plugins/cte.csi/csi.sock"
+            - "--v=5"
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - name: plugin-dir
+              mountPath: /csi
+            - name: registration-dir
+              mountPath: /registration
+
+        - name: csi-sidecar-attacher
+          image: k8s.gcr.io/sig-storage/csi-attacher:v3.0.0
+          args:
+            - "--csi-address=/csi/csi.sock"
+            - "--v=5"
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - mountPath: /csi
+              name: plugin-dir
+
+      imagePullSecrets:
+        - name: cte-csi-secret
