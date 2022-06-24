@@ -1,0 +1,13 @@
+# Default values for csi-deploy-chart.
+
+replicaCount: 1
+
+namespace: "kube-system"
+
+image:
+  cteCsiImage: "docker.io/thalesciphertrust/ciphertrust-transparent-encryption-kubernetes"
+  tag: "latest"
+  pullPolicy: Always
+  logLevel: "1"
+
+imagePullSecrets: cte-csi-image-pull-secret

@@ -1,0 +1,22 @@
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: cte-claim
+  annotations:
+    # CTE for Kubernetes GuardPolicy name. This GuardPolicy is located on the
+    # CipherTrust Manager and should match a policy name available on the
+    # storage class for this PVC. (Required)
+    csi.cte.cpl.thalesgroup.com/policy: policy_1
+
+    # Name of the unprotected source PVC that will be protected by this CTE-PVC.
+    # (Required)
+    csi.cte.cpl.thalesgroup.com/source_pvc: nfs-test-claim
+spec:
+  storageClassName: csi-test-sc
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      # This parameter is required by Kubernetes but ignored by CTE-CSI.
+      storage: 1Ki

@@ -3,10 +3,13 @@ kind: DaemonSet
 apiVersion: apps/v1
 metadata:
   name: cte-csi-node
+  namespace: "{{ .Values.namespace }}"
 spec:
   selector:
     matchLabels:
       app: cte-csi-node
+  updateStrategy:
+    type: OnDelete
   template:
     metadata:
       labels:
@@ -14,6 +17,21 @@ spec:
     spec:
       hostPID: true
       serviceAccountName: cte-csi-node
+      terminationGracePeriodSeconds: 600
+      nodeSelector:
+        kubernetes.io/os: linux
+      priorityClassName: system-node-critical
+      tolerations:
+        - operator: "Exists"
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: type
+                    operator: NotIn
+                    values:
+                      - virtual-kubelet
       volumes:
         - name: registration-dir
           hostPath:
@@ -22,7 +40,7 @@ spec:
 
         - name: plugin-dir
           hostPath:
-            path: /var/lib/kubelet/plugins/cte.csi/
+            path: /var/lib/kubelet/plugins/csi.cte.cpl.thalesgroup.com/
             type: DirectoryOrCreate
 
         - name: mountpoint-dir
@@ -47,9 +65,8 @@ spec:
 
       containers:
         - name: cte-csi
-          #image: gitlabent.thalesesec.com:5050/agents/core-dev/cte-k8-builder/cte_csi
-          image: registry-1.docker.io/thalesgroup/ciphertrust-transparent-encryption:cte_csi
-          imagePullPolicy: Always
+          image: "{{ .Values.image.cteCsiImage }}:{{ .Values.image.tag }}"
+          imagePullPolicy: "{{ .Values.image.pullPolicy }}"
           lifecycle:
             preStop:
               exec:
@@ -70,7 +87,7 @@ spec:
             - "--endpoint=$(CSI_ENDPOINT)"
             - "--nodeid=$(KUBE_NODE_NAME)"
             - "--namespace=$(KUBE_NAMESPACE)"
-            - "--v=5"
+            - "--v={{ .Values.image.logLevel }}"
           securityContext:
             privileged: true
             capabilities:
@@ -92,8 +109,11 @@ spec:
               mountPath: /chroot
 
         - name: cte-agent-logs
-          #image: gitlabent.thalesesec.com:5050/agents/core-dev/cte-k8-builder/cte-csi-logger
-          image: registry-1.docker.io/thalesgroup/ciphertrust-transparent-encryption:cte-csi-logger
+          image: "{{ .Values.image.cteCsiImage }}:{{ .Values.image.tag }}"
+          args:
+            - "--agentlogs"
+          securityContext:
+            privileged: true
           volumeMounts:
             - name: varlog
               mountPath: /var/log
@@ -104,8 +124,8 @@ spec:
           image: k8s.gcr.io/sig-storage/csi-node-driver-registrar:v2.0.1
           args:
             - "--csi-address=/csi/csi.sock"
-            - "--kubelet-registration-path=/var/lib/kubelet/plugins/cte.csi/csi.sock"
-            - "--v=5"
+            - "--kubelet-registration-path=/var/lib/kubelet/plugins/csi.cte.cpl.thalesgroup.com/csi.sock"
+            - "--v={{ .Values.image.logLevel }}"
           securityContext:
             privileged: true
           volumeMounts:
@@ -118,7 +138,7 @@ spec:
           image: k8s.gcr.io/sig-storage/csi-attacher:v3.0.0
           args:
             - "--csi-address=/csi/csi.sock"
-            - "--v=5"
+            - "--v={{ .Values.image.logLevel }}"
           securityContext:
             privileged: true
           volumeMounts:
@@ -126,4 +146,4 @@ spec:
               name: plugin-dir
 
       imagePullSecrets:
-        - name: cte-csi-secret
+        - name: "{{ .Values.imagePullSecrets }}"

@@ -1,117 +1,156 @@
 #!/bin/bash
 
-SERVER=""
 USER=""
 PASSWD=""
-LOC=""
+SERVER=""
 
-# This values must match the values in the node server and controller yaml files
-DEFAULT_SERVER="registry-1.docker.io"
-DEFAULT_LOC="agents/core-dev/cte-k8-builder"
+CSI_DEPLOYMENT_NAME="cte-csi-deployment"
 
-NAMESPACE=default
+DEPLOY_NAMESPACE="kube-system"
 DEPLOY_FILE_DIR=deploy
-YAML_CONFIGS=( \
-    "${DEPLOY_FILE_DIR}/kubernetes/rbac-cte-csi-controller.yaml" \
-    "${DEPLOY_FILE_DIR}/kubernetes/rbac-cte-csi-nodeserver.yaml" \
-    "${DEPLOY_FILE_DIR}/kubernetes/cte-csi-controller.yaml" \
-    "${DEPLOY_FILE_DIR}/kubernetes/cte-csi-nodeserver.yaml" \
-    )
+
+IMAGE_PULL_SECRET="cte-csi-image-pull-secret"
 
 kube_create_secret()
 {
     # Skip if User or Password not set
-    if [ -z "${USER}" ] || [ -z "${PASSWD}" ]; then
+    if [ -z "${USER}" ] || [ -z "${PASSWD}" || -z "${SERVER}"]; then
         return
     fi
-    if [[ "${SERVER}" == "" ]]; then
-        SERVER=${DEFAULT_SERVER}
+
+    kubectl get secrets ${IMAGE_PULL_SECRET} --namespace=${DEPLOY_NAMESPACE} > /dev/null 2>&1
+    if [ $? -eq 0 ]; then
+        kubectl delete secrets ${IMAGE_PULL_SECRET} --namespace=${DEPLOY_NAMESPACE}
+        if [ $? -ne 0 ]; then
+            exit 1
+        fi
     fi
 
     # TODO: Need to make sure to test with container runtimes other than Docker.
-    RUN_CMD="kubectl create secret docker-registry cte-csi-secret
+    RUN_CMD="kubectl create secret docker-registry ${IMAGE_PULL_SECRET}
         --docker-server=${SERVER} --docker-username=${USER}
-        --docker-password=${PASSWD}"
+        --docker-password=${PASSWD} --namespace=${DEPLOY_NAMESPACE}"
     echo ${RUN_CMD}
     ${RUN_CMD}
+    if [ $? -ne 0 ]; then
+        exit 1
+    fi
+}
+
+check_exec() {
+    if ! [ -x "$(command -v ${1})" ]; then
+        echo "Error: '${1}' is not installed or not in PATH." >&2
+        exit 1
+    fi
 }
 
 remove()
 {
     if [[ "${REMOVE}" == "YES" ]]; then
-        kubectl delete secrets cte-csi-secret 2> /dev/null
+        kubectl delete secrets ${IMAGE_PULL_SECRET} --namespace=${DEPLOY_NAMESPACE} 2> /dev/null
     fi
 
-    for YAML in ${YAML_CONFIGS[@]}; do
-        kubectl delete --grace-period=0 --force -f ${YAML} 2> /dev/null
+	helm delete --namespace=${DEPLOY_NAMESPACE} ${CSI_DEPLOYMENT_NAME} 2> /dev/null
+}
+
+get_chart_version() {
+    local IFS=.
+    vers=($1)
+    if [ ${#vers[@]} -ne 4 ]; then
+        echo "Invalid tag version"
+        exit 1
+    fi
+    char_version=""
+    count = 1
+    for i in ${vers}; do
+        if [ ! "$i" -ge 0 ]; then
+            echo "Invalid tag version"
+            exit 1
+        fi
     done
+
+    CHART_VERSION=${vers[0]}.${vers[1]}.${vers[2]}
 }
 
 start()
 {
-    if [ -z "${SERVER}" ]; then
-        SERVER=${DEFAULT_SERVER}
-    fi
-    if [ -z "${LOC}" ]; then
-        LOC=${DEFAULT_LOC}
-    fi
+    check_exec kubectl
+    check_exec helm
 
-    # Remove all the running containers if any.
-    remove
+    CHART_VERSION=latest
+    if [ -z "${CSI_TAG}" ]; then
+        CHART_VERSION=latest
+    else
+        get_chart_version $CSI_TAG
+        EXTRA_OPTIONS="${EXTRA_OPTIONS} --set image.tag=${CSI_TAG}"
+    fi
 
     kube_create_secret
 
-    for YAML in ${YAML_CONFIGS[@]}; do
-        cat ${YAML} | sed "s|${DEFAULT_SERVER}/${DEFAULT_LOC}|${SERVER}/${LOC}|" | \
-            kubectl apply -f -
-    done
+    echo "Deploying $CSI_DEPLOYMENT_NAME using helm chart..."
+    cd "${DEPLOY_FILE_DIR}/kubernetes"
+
+    # "upgrade --install" will install if no prioir install exists, else upgrade
+    HELM_CMD="helm upgrade --install --namespace=${DEPLOY_NAMESPACE} ${CSI_DEPLOYMENT_NAME}
+              ./${CHART_VERSION} ${EXTRA_OPTIONS}"
+    echo ${HELM_CMD}
+    ${HELM_CMD}
 }
 
 usage()
 {
     echo  "Options :"
-    echo  "-s= | --server=   Container registry server value."
-    echo  "                             Default: registry-1.docker.io"
-    echo  "-u= | --user=     Container registry user name value."
-    echo  "-p= | --passwd=     Container registry user password value."
-    echo  "-r | --remove     Undeploy the CSI driver and exit"
+    echo  "-t | --tag=      Tag of image on the server"
+    echo  "                             Default: latest"
+    echo  "-r | --remove    Undeploy the CSI driver and exit"
 }
 
 # main
-if [ $# -eq 0 ]; then
-    echo "Please provide the arguments."
-    echo ""
-    usage
-    exit 1
-fi
 
-for i in "$@"; do
-    case $i in
+L_OPTS="server:,user:,passwd:,tag:,remove,help"
+S_OPTS="s:u:p:t:rh"
+options=$(getopt -a -l ${L_OPTS} -o ${S_OPTS} -- "$@")
+if [ $? -ne 0 ]; then
+        exit 1
+fi
+eval set -- "$options"
+
+while true ; do
+    case $1 in
         -h|--help)
             usage
-            exit 1
+            exit 0
             ;;
-        -s=*|--server=*)
-            SERVER="${i#*=}"
-            shift
+        -s|--server)
+            SERVER=${2}
+            shift 2
             ;;
-        -u=*|--user=*)
-            USER="${i#*=}"
-            shift
+        -u|--user)
+            USER=${2}
+            shift 2
             ;;
-        -p=*|--passwd=*)
-            PASSWD="${i#*=}"
-            shift
+        -p|--passwd)
+            PASSWD=${2}
+            shift 2
             ;;
-        -l=*|--loc=*)
-            LOC="${i#*=}"
-            shift
+        -t|--tag)
+            CSI_TAG=${2}
+            shift 2
             ;;
         -r|--remove)
             REMOVE="YES"
             remove
+            exit 0
+            ;;
+        --)
+            shift
+            break
+            ;;
+        *)
+            echo -n "unknown option: ${1}"
             exit 1
             ;;
+
     esac
 done
 
