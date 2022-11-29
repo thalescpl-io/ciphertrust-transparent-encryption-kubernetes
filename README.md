@@ -10,7 +10,7 @@ Product Description:
 
 More information can be found through Thales online documentation portal at:
 
-[https://thalesdocs.com/ctp/cte-k8s/latest/](https://thalesdocs.com/ctp/cte-k8s/latest/)
+[https://thalesdocs.com/ctp/cte-con/cte-k8s/latest/](https://thalesdocs.com/ctp/cte-con/cte-k8s/latest/)
 
 # Quick installation guide
 > **_NOTE:_**  Refer to the online docs for a detailed installation and configuration guide.
