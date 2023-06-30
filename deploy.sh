@@ -6,8 +6,16 @@ SERVER=""
 
 CSI_DEPLOYMENT_NAME="cte-csi-deployment"
 
+DEFAULT_CRISOCK="/run/crio/crio.sock"
 DEPLOY_NAMESPACE="kube-system"
 DEPLOY_FILE_DIR=deploy
+
+# Default namespaces for operator deployment
+OPERATOR=NO
+OPR_NS_ARG=0
+CSI_NS_ARG=0
+OPERATOR_NS="kube-system"
+CSI_NS="kube-system"
 
 IMAGE_PULL_SECRET="cte-csi-image-pull-secret"
 
@@ -46,11 +54,56 @@ check_exec() {
 
 remove()
 {
+    if [[ ${OPERATOR} == "YES" ]]; then
+        # Case with cte-csi was installed using helm, but attempt to remove using operator
+        if [ -x "$(command -v helm)" ]; then
+            helm list -q --all-namespaces 2>/dev/null | grep -q cte-csi-deployment
+            if [ $? -eq 0 ]; then
+                echo "Error: CTE for Kubernetes was installed using helm. Try --remove without the --operator parameter"
+                exit 1
+            fi
+        fi
+
+        OPERATOR_DEPLOY_FILE_DIR=${DEPLOY_FILE_DIR}/kubernetes/${CHART_VERSION}/operator-deploy
+        ${OPERATOR_DEPLOY_FILE_DIR}/deploy.sh --tag=${CHART_VERSION} --operator-ns=${OPERATOR_NS} --cte-ns=${CSI_NS} --remove
+        exit 0
+    fi
+
+    # Case where cte-csi was possibly installed using operator, but attempt to remove using helm (without the --operator arg)
+    if [ -x "$(command -v helm)" ]; then
+        helm list -q --all-namespaces 2>/dev/null | grep -q cte-csi-deployment
+        if [ $? -eq 1 ]; then
+            echo "Error: CTE for Kubernetes deployment not found. Was it installed using --operator?"
+            exit 1
+        fi
+    fi
+
     if [[ "${REMOVE}" == "YES" ]]; then
         kubectl delete secrets ${IMAGE_PULL_SECRET} --namespace=${DEPLOY_NAMESPACE} 2> /dev/null
     fi
 
-	helm delete --namespace=${DEPLOY_NAMESPACE} ${CSI_DEPLOYMENT_NAME} 2> /dev/null
+    helm delete --namespace=${DEPLOY_NAMESPACE} ${CSI_DEPLOYMENT_NAME} 2> /dev/null
+    exit 0
+}
+
+kube_autodetect_crisocket()
+{
+	CRISOCK=`kubectl get nodes -o jsonpath='{range .items[0]}{.metadata.annotations.kubeadm\.alpha\.kubernetes\.io/cri-socket}'`
+	if [ $? -ne 0 ]; then
+		exit 1;
+	fi
+	CRISOCK=${CRISOCK#"unix://"}
+	if [ -z "${CRISOCK}" ]; then
+		CRISOCK=${DEFAULT_CRISOCK}
+	fi
+	echo "Using CRISocket path:" ${CRISOCK}
+}
+
+install_operator()
+{
+    OPERATOR_DEPLOY_FILE_DIR=${DEPLOY_FILE_DIR}/kubernetes/${CHART_VERSION}/operator-deploy
+    kube_create_secret
+    ${OPERATOR_DEPLOY_FILE_DIR}/deploy.sh --tag=${CHART_VERSION} --operator-ns=${OPERATOR_NS} --cte-ns=${CSI_NS}
 }
 
 get_chart_version() {
@@ -61,7 +114,6 @@ get_chart_version() {
         exit 1
     fi
     char_version=""
-    count = 1
     for i in ${vers}; do
         if [ ! "$i" -ge 0 ]; then
             echo "Invalid tag version"
@@ -75,7 +127,6 @@ get_chart_version() {
 start()
 {
     check_exec kubectl
-    check_exec helm
 
     CHART_VERSION=latest
     if [ -z "${CSI_TAG}" ]; then
@@ -85,7 +136,24 @@ start()
         EXTRA_OPTIONS="${EXTRA_OPTIONS} --set image.tag=${CSI_TAG}"
     fi
 
+    # some variables have to be set before we call remove for operator
+    if [[ ${REMOVE} == "YES" ]]; then
+        remove
+    fi
+
+    if [[ ${OPERATOR} == "YES" ]]; then
+        install_operator
+        exit 0
+    fi
+
+    check_exec helm
+
+    # Remove repeating /
+    IMAGE=$(echo ${SERVER}/${LOC}/cte_csi | tr -s /)
+
     kube_create_secret
+
+    kube_autodetect_crisocket
 
     echo "Deploying $CSI_DEPLOYMENT_NAME using helm chart..."
     cd "${DEPLOY_FILE_DIR}/kubernetes"
@@ -103,12 +171,15 @@ usage()
     echo  "-t | --tag=      Tag of image on the server"
     echo  "                             Default: latest"
     echo  "-r | --remove    Undeploy the CSI driver and exit"
+    echo  "-o | --operator  Deploy CTE-K8s Operator and CSI driver"
+    echo  "--operator-ns=   The namespace in which to deploy the Operator"
+    echo  "--cte-ns=        The namespace in which to deploy the CSI driver"
 }
 
 # main
 
-L_OPTS="server:,user:,passwd:,tag:,remove,help"
-S_OPTS="s:u:p:t:rh"
+L_OPTS="server:,user:,passwd:,tag:,remove,help,operator-ns:,cte-ns:,operator"
+S_OPTS="s:u:p:t:rho"
 options=$(getopt -a -l ${L_OPTS} -o ${S_OPTS} -- "$@")
 if [ $? -ne 0 ]; then
         exit 1
@@ -139,8 +210,22 @@ while true ; do
             ;;
         -r|--remove)
             REMOVE="YES"
-            remove
-            exit 0
+            shift
+            ;;
+       -o|--operator)
+            OPERATOR="YES"
+            shift
+            ;;
+       --operator-ns)
+            OPR_NS_ARG=1
+            OPERATOR_NS=${2}
+            shift 2
+            ;;
+       --cte-ns)
+            CSI_NS_ARG=1
+            CSI_NS=${2}
+            DEPLOY_NAMESPACE=${2}
+            shift 2
             ;;
         --)
             shift
@@ -154,5 +239,16 @@ while true ; do
     esac
 done
 
-echo "Starting the cte-csi containers."
+if [ ${OPR_NS_ARG} -eq 1 ] || [ ${CSI_NS_ARG} -eq 1 ]; then
+    if [ "${OPERATOR}" = "NO" ]; then
+        echo "the --operator-ns and --cte-ns parameters are supported only with --operator parameter"
+        exit 1
+    fi
+fi
+
+if [[ "${REMOVE}" == "YES" ]]; then
+    echo "Removing the cte-csi containers."
+else
+    echo "Starting the cte-csi containers."
+fi
 start
