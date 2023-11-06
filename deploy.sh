@@ -5,8 +5,7 @@ PASSWD=""
 SERVER=""
 
 CSI_DEPLOYMENT_NAME="cte-csi-deployment"
-
-DEFAULT_CRISOCK="/run/crio/crio.sock"
+CRISOCK=""
 DEPLOY_NAMESPACE="kube-system"
 DEPLOY_FILE_DIR=deploy
 
@@ -22,7 +21,7 @@ IMAGE_PULL_SECRET="cte-csi-image-pull-secret"
 kube_create_secret()
 {
     # Skip if User or Password not set
-    if [ -z "${USER}" ] || [ -z "${PASSWD}" || -z "${SERVER}"]; then
+    if [ -z "${USER}" ] || [ -z "${PASSWD}" ] || [ -z "${SERVER}"]; then
         return
     fi
 
@@ -88,15 +87,51 @@ remove()
 
 kube_autodetect_crisocket()
 {
-	CRISOCK=`kubectl get nodes -o jsonpath='{range .items[0]}{.metadata.annotations.kubeadm\.alpha\.kubernetes\.io/cri-socket}'`
+	if [ -n "${CRISOCK}" ]; then
+		echo "Automatic detection of CRI socket is disabled, using user provided path"
+		return
+	fi
+        echo "Automatic detection of CRI socket is enabled"
+	# detect CRI socket path based on kubeadm annotations.
+	KUBECTL_OUT=`kubectl get nodes -o jsonpath='{range .items[0]}{.metadata.annotations.kubeadm\.alpha\.kubernetes\.io/cri-socket}'`
 	if [ $? -ne 0 ]; then
-		exit 1;
+		exit 1
 	fi
-	CRISOCK=${CRISOCK#"unix://"}
-	if [ -z "${CRISOCK}" ]; then
-		CRISOCK=${DEFAULT_CRISOCK}
+	CRISOCK=${KUBECTL_OUT#"unix://"}
+	if [ -n "${CRISOCK}" ]; then
+		echo "Found exact CRI socket path using kubeadm annotations."
+		return
 	fi
-	echo "Using CRISocket path:" ${CRISOCK}
+	# detect container runtime
+	KUBECTL_OUT=`kubectl get node -o=jsonpath="{.items[0].status.nodeInfo.containerRuntimeVersion}"`
+	if [ $? -ne 0 ]; then
+		exit 1
+	fi
+	# retrieve container runtime name from kubectl output, ex: cri-o://1.25.1
+	CRT=${KUBECTL_OUT%://*}
+	if [ -n "$CRT" ]; then
+		case $CRT in
+			containerd)
+				CRISOCK="/run/containerd/containerd.sock"
+				;;
+			cri-o)
+				CRISOCK="/run/crio/crio.sock"
+				;;
+			docker)
+				CRISOCK="/run/cri-dockerd.sock"
+				;;
+			*)
+				echo "Unsupported container runtime $CRT"
+				CRISOCK=
+				;;
+		esac
+		if [ -n "$CRISOCK" ]; then
+			echo "Using default CRI socket path $CRISOCK for container runtime $CRT"
+			return
+		fi
+	fi
+	echo "Unable to detect CRI socket path for your configuration. Provide path with --cri-sock option."
+	exit 1
 }
 
 install_operator()
@@ -104,35 +139,39 @@ install_operator()
     OPERATOR_DEPLOY_FILE_DIR=${DEPLOY_FILE_DIR}/kubernetes/${CHART_VERSION}/operator-deploy
     kube_create_secret
     ${OPERATOR_DEPLOY_FILE_DIR}/deploy.sh --tag=${CHART_VERSION} --operator-ns=${OPERATOR_NS} --cte-ns=${CSI_NS}
+
+    exit 0
 }
 
 get_chart_version() {
-    local IFS=.
-    vers=($1)
-    if [ ${#vers[@]} -ne 4 ]; then
-        echo "Invalid tag version"
-        exit 1
-    fi
-    char_version=""
-    for i in ${vers}; do
-        if [ ! "$i" -ge 0 ]; then
-            echo "Invalid tag version"
-            exit 1
-        fi
-    done
-
-    CHART_VERSION=${vers[0]}.${vers[1]}.${vers[2]}
+    #Tag can be of form "latest", "1.2.0-latest", "latest-1.3.0"
+    echo $1 | awk 'BEGIN { OFS="."; FS="[.-]" } {
+        if (NF == 1) {
+                if ( $1 == "latest" )
+                        print "latest"
+        } else if (NF == 4) {
+                if ( $1 == "latest" )
+                        print $2,$3,$4
+                else
+                        print $1,$2,$3
+        } else {
+                print "InvalidTag"
+        }
+    }'
 }
 
 start()
 {
     check_exec kubectl
 
-    CHART_VERSION=latest
-    if [ -z "${CSI_TAG}" ]; then
-        CHART_VERSION=latest
+    if [[ -z "${CSI_TAG}" ]]; then
+        CHART_VERSION="latest"
     else
-        get_chart_version $CSI_TAG
+        CHART_VERSION=`get_chart_version $CSI_TAG`
+	if [[ "${CHART_VERSION}" = "InvalidTag" ]]; then
+            echo "Invalid tag version - ${CSI_TAG}"
+            exit 1
+        fi
         EXTRA_OPTIONS="${EXTRA_OPTIONS} --set image.tag=${CSI_TAG}"
     fi
 
@@ -142,8 +181,7 @@ start()
     fi
 
     if [[ ${OPERATOR} == "YES" ]]; then
-        install_operator
-        exit 0
+           install_operator
     fi
 
     check_exec helm
@@ -154,6 +192,8 @@ start()
     kube_create_secret
 
     kube_autodetect_crisocket
+    echo "Using CRISocket path:" ${CRISOCK}
+    EXTRA_OPTIONS="${EXTRA_OPTIONS} --set CRISocket=${CRISOCK}"
 
     echo "Deploying $CSI_DEPLOYMENT_NAME using helm chart..."
     cd "${DEPLOY_FILE_DIR}/kubernetes"
@@ -174,11 +214,12 @@ usage()
     echo  "-o | --operator  Deploy CTE-K8s Operator and CSI driver"
     echo  "--operator-ns=   The namespace in which to deploy the Operator"
     echo  "--cte-ns=        The namespace in which to deploy the CSI driver"
+    echo  "--cri-sock=      Container Runtime Interface socket path"
 }
 
 # main
 
-L_OPTS="server:,user:,passwd:,tag:,remove,help,operator-ns:,cte-ns:,operator"
+L_OPTS="server:,user:,passwd:,tag:,remove,help,operator-ns:,cte-ns:,operator,cri-sock:"
 S_OPTS="s:u:p:t:rho"
 options=$(getopt -a -l ${L_OPTS} -o ${S_OPTS} -- "$@")
 if [ $? -ne 0 ]; then
@@ -225,6 +266,10 @@ while true ; do
             CSI_NS_ARG=1
             CSI_NS=${2}
             DEPLOY_NAMESPACE=${2}
+            shift 2
+            ;;
+       --cri-sock)
+            CRISOCK=${2}
             shift 2
             ;;
         --)

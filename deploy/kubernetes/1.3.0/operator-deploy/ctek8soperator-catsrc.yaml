@@ -1,0 +1,14 @@
+apiVersion: operators.coreos.com/v1alpha1
+kind: CatalogSource
+metadata:
+  name: ctek8soperator-catalog
+  # Deploy the catalog in openshift-marketplace NS for the subscription to be visible in the OCP Cluster Console GUI
+  namespace: openshift-marketplace
+spec:
+  displayName: Ciphertrust Transparent Encryption for Kubernetes Operator Catalog
+  publisher: Thales DIS CPL
+  sourceType: grpc
+  image: "docker.io/thalesciphertrust/ciphertrust-transparent-encryption-kubernetes-operator-catalog:v1.3.0"
+  updateStrategy:
+    registryPoll:
+      interval: 24h

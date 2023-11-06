@@ -1,0 +1,26 @@
+apiVersion: cte-k8s-operator.csi.cte.cpl.thalesgroup.com/v1
+kind: CteK8sOperator
+metadata:
+  labels:
+    app.kubernetes.io/name: ctek8soperator
+    app.kubernetes.io/instance: ctek8soperator
+    app.kubernetes.io/part-of: cte-k8s-operator
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/created-by: cte-k8s-operator
+  name: ctek8soperator
+spec:
+  replicas: 1
+  image: "docker.io/thalesciphertrust/ciphertrust-transparent-encryption-kubernetes"
+  version: "1.3.0-latest"
+  imagePullPolicy: Always
+  logLevel: 5
+  apiburst: 300
+  apiqps: 200
+  imagePullSecrets:
+    - name: cte-csi-secret
+  registrationCleanupInterval: 1
+  pauseimage: "k8s.gcr.io/pause:latest"
+  volumes:
+    - name: cri-sock
+      hostPath:
+        path: "/run/crio/crio.sock"
