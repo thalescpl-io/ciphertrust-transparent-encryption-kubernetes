@@ -15,6 +15,10 @@ IS_OCP=`kubectl api-resources | awk -F' ' '{ print $2 }' | grep route.openshift.
 chk_pkgs()
 {
     if [ ${IS_OCP} -ge 1 ]; then
+        if ! [ -x "$(command -v oc)" ]; then
+            echo "Error: Openshift CLI command 'oc' is not installed or not in PATH." >&2
+            exit 1
+        fi
         OC_KUBECTL_CMD=`which oc`
     else
         OC_KUBECTL_CMD=`which kubectl`
@@ -328,6 +332,7 @@ cleanup_deployment()
     ${OC_KUBECTL_CMD} delete ClusterRoleBinding cte-csi-controller-binding cte-csi-node-binding
     ${OC_KUBECTL_CMD} delete customresourcedefinition.apiextensions.k8s.io/ctek8soperators.cte-k8s-operator.csi.cte.cpl.thalesgroup.com
     ${OC_KUBECTL_CMD} delete operator.operators.coreos.com/cte-k8s-operator.${OPR_NS}
+    ${OC_KUBECTL_CMD} delete csidriver csi.cte.cpl.thalesgroup.com
     if [ ${IS_OCP} -eq 1 ] && [ "x${OPR_NS}" != "xkube-system" ]
     then
         ${OC_KUBECTL_CMD} delete scc cte-csi-scc

@@ -10,7 +10,7 @@ metadata:
     csi.cte.cpl.thalesgroup.com/policy: policy_1
 
     # Name of the unprotected source PVC that will be protected by this CTE-PVC.
-    # (Required)
+    # (Required, ignored when using Dynamic PVC)
     csi.cte.cpl.thalesgroup.com/source_pvc: nfs-test-claim
 spec:
   storageClassName: csi-test-sc

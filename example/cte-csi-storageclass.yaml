@@ -8,7 +8,7 @@ reclaimPolicy: Delete
 volumeBindingMode: Immediate
 allowVolumeExpansion: true
 parameters:
-  # Domain name or IP address of the CiperTrust Manager (Required)
+  # Domain name or IP address of the CipherTrust Manager (Required)
   key_manager_addr: 192.168.70.1
 
   # Name of the CipherTrust Manager K8s Storage Group. (Required)
@@ -17,10 +17,31 @@ parameters:
   # Kubernetes Secret with CM registration token (Required)
   registration_token_secret: cm-reg-token
 
-  # Small registration description to be displayed in the CiperTrust Manager (Optional)
+  # Kubernetes secret with External CA signed client certificate (Optional)
+  # kubectl create secret generic <secret-name> --from-file=<clientName>.crt=<client_cert.pem> --from-file=<clientName>.key=<client_key.pem> --from-file=<clientName>.passphrase=<passphrase>
+  # <clientName> i.e. client1 or client2 or client3 ...
+  # Multiple client cert details can be added with same secret as well with above command
+  external_ca_client_secret: <secret-name>
+
+  # Small registration description to be displayed in the CipherTrust Manager (Optional)
   client_description: "Describe your K8s client"
 
-  # Time in minutes to wait before unregistering from the CiperTrust Manager
+  # When specified, the this parameter will be used to automatically add the
+  # csi.cte.cpl.thalesgroup.com/source_pvc parameter to the CTE-K8s PVC based
+  # on the request parameters (Optional)(Required only for Dynamic PVC)
+  source_storage_class: <some_sc_name>
+
+  # When specified, the this parameter will be used to automatically add the
+  # csi.cte.cpl.thalesgroup.com/policy parameter to the CTE-K8s PVC based on
+  # the request parameters.  (Optional)(Required if source_storage_class is set)
+  default_policy: <policy_1>
+
+  # When specified and set to "true", this parameter will be used to automatically
+  # delete the dynamically sourcePVC. This might delete the actual data volume, depend
+  # upon the provisioner driver implementation. Default is set as "false".  (Optional)
+  allow_source_pvc_delete: "false"
+
+  # Time in minutes to wait before unregistering from the CipherTrust Manager
   # once all volumes have been unguarded. Parameter must be added as a string
   # integer value. Default "10" minute. (Optional)
   registration_period: "10"

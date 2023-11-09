@@ -19,7 +19,7 @@ spec:
   imagePullSecrets:
     - name: cte-csi-secret
   registrationCleanupInterval: 1
-  pauseimage: "k8s.gcr.io/pause:latest"
+  pauseimage: "registry.k8s.io/pause:3.9"
   volumes:
     - name: cri-sock
       hostPath:

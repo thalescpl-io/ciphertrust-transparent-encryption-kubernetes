@@ -8,7 +8,7 @@ spec:
   displayName: Ciphertrust Transparent Encryption for Kubernetes Operator Catalog
   publisher: Thales DIS CPL
   sourceType: grpc
-  image: "docker.io/thalesciphertrust/ciphertrust-transparent-encryption-kubernetes-operator-catalog:v1.3.0"
+  image: "docker.io/thalesciphertrust/ciphertrust-transparent-encryption-kubernetes-operator-catalog:v1.2.5"
   updateStrategy:
     registryPoll:
       interval: 24h

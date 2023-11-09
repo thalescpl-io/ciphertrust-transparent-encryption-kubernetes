@@ -9,6 +9,8 @@ CRISOCK=""
 DEPLOY_NAMESPACE="kube-system"
 DEPLOY_FILE_DIR=deploy
 
+IMAGE_PULL_SECRET="cte-csi-secret"
+
 # Default namespaces for operator deployment
 OPERATOR=NO
 OPR_NS_ARG=0
@@ -16,12 +18,10 @@ CSI_NS_ARG=0
 OPERATOR_NS="kube-system"
 CSI_NS="kube-system"
 
-IMAGE_PULL_SECRET="cte-csi-image-pull-secret"
-
 kube_create_secret()
 {
     # Skip if User or Password not set
-    if [ -z "${USER}" ] || [ -z "${PASSWD}" ] || [ -z "${SERVER}"]; then
+    if [ -z "${USER}" ] || [ -z "${PASSWD}" ] || [ -z "${SERVER}" ]; then
         return
     fi
 
@@ -144,7 +144,7 @@ install_operator()
 }
 
 get_chart_version() {
-    #Tag can be of form "latest", "1.2.0-latest", "latest-1.3.0"
+    #Tag can be of form "latest", "X.Y.Z-latest", "latest-X.Y.Z" or "X.Y.Z.NNNN"
     echo $1 | awk 'BEGIN { OFS="."; FS="[.-]" } {
         if (NF == 1) {
                 if ( $1 == "latest" )
@@ -164,15 +164,14 @@ start()
 {
     check_exec kubectl
 
-    if [[ -z "${CSI_TAG}" ]]; then
+    if [ ! -v "CSI_TAG" ]; then
         CHART_VERSION="latest"
     else
         CHART_VERSION=`get_chart_version $CSI_TAG`
-	if [[ "${CHART_VERSION}" = "InvalidTag" ]]; then
+	if [[ "${CHART_VERSION}" == "InvalidTag" ]]; then
             echo "Invalid tag version - ${CSI_TAG}"
             exit 1
         fi
-        EXTRA_OPTIONS="${EXTRA_OPTIONS} --set image.tag=${CSI_TAG}"
     fi
 
     # some variables have to be set before we call remove for operator
@@ -181,13 +180,10 @@ start()
     fi
 
     if [[ ${OPERATOR} == "YES" ]]; then
-           install_operator
+        install_operator
     fi
 
     check_exec helm
-
-    # Remove repeating /
-    IMAGE=$(echo ${SERVER}/${LOC}/cte_csi | tr -s /)
 
     kube_create_secret
 
@@ -199,8 +195,15 @@ start()
     cd "${DEPLOY_FILE_DIR}/kubernetes"
 
     # "upgrade --install" will install if no prioir install exists, else upgrade
-    HELM_CMD="helm upgrade --install --namespace=${DEPLOY_NAMESPACE} ${CSI_DEPLOYMENT_NAME}
-              ./${CHART_VERSION} ${EXTRA_OPTIONS}"
+    if [ ! -v HELM_CMD ]; then
+        # the HELM_CMD variable is not defined
+        HELM_CMD="helm upgrade --install --namespace=${DEPLOY_NAMESPACE} ${CSI_DEPLOYMENT_NAME}"
+        HELM_CMD="${HELM_CMD} ./${CHART_VERSION} ${EXTRA_OPTIONS}"
+    else
+        # We are being called from a wrapper script, which defines HELM_CMD
+	HELM_CMD="${HELM_CMD} --namespace=${DEPLOY_NAMESPACE}"
+        HELM_CMD="${HELM_CMD} ${CSI_DEPLOYMENT_NAME} ./${CHART_VERSION} ${EXTRA_OPTIONS}"
+    fi
     echo ${HELM_CMD}
     ${HELM_CMD}
 }
@@ -296,4 +299,5 @@ if [[ "${REMOVE}" == "YES" ]]; then
 else
     echo "Starting the cte-csi containers."
 fi
+
 start

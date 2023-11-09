@@ -142,6 +142,7 @@ spec:
             - "--extra-create-metadata"
             - "--feature-gates=Topology=true"
             - "--leader-election"
+            - "--timeout=60s"
           securityContext:
             # This is necessary only for systems with SELinux, where
             # non-privileged sidecar containers cannot access unix domain socket

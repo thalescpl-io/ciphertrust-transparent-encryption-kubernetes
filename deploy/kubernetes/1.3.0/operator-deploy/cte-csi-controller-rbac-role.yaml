@@ -39,3 +39,11 @@ rules:
     resources: ["securitycontextconstraints"]
     resourceNames: ["cte-csi-scc"]
     verbs: ["use"]
+
+  - apiGroups: [""]
+    resources: ["secrets", "namespaces"]
+    verbs: ["get", "list"]
+
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "list", "delete", "get", "patch"]

@@ -9,6 +9,6 @@ spec:
   publisher: Thales DIS CPL
   sourceType: grpc
   image: "docker.io/thalesciphertrust/ciphertrust-transparent-encryption-kubernetes-operator-catalog:v1.2.5"
-  udateStrategy:
+  updateStrategy:
     registryPoll:
       interval: 24h

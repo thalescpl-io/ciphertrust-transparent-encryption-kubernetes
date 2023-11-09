@@ -9,7 +9,7 @@ image:
   cteCsiTag: "1.3.0-latest"
   pullPolicy: Always
   logLevel: "1"
-  pauseImage: "k8s.gcr.io/pause:latest"
+  pauseImage: "registry.k8s.io/pause:3.9"
 
 imagePullSecrets: cte-csi-secret
 

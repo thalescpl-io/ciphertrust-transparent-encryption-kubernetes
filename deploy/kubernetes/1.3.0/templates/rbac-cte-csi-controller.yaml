@@ -16,7 +16,7 @@ rules:
 
   - apiGroups: [""]
     resources: ["persistentvolumeclaims"]
-    verbs: ["get", "list", "watch", "update"]
+    verbs: ["get", "list", "watch", "update", "create", "delete"]
 
   - apiGroups: [""]
     resources: ["persistentvolumes"]
@@ -45,6 +45,16 @@ rules:
   - apiGroups: [""]
     resources: ["secrets", "namespaces"]
     verbs: ["get", "list"]
+
+  - apiGroups: ["security.openshift.io"]
+    resources: ["securitycontextconstraints"]
+    resourceNames: ["cte-csi-scc"]
+    verbs: ["use"]
+
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "list", "delete", "get", "patch"]
+
 ---
 kind: ClusterRoleBinding
 apiVersion: rbac.authorization.k8s.io/v1
