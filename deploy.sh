@@ -138,7 +138,7 @@ install_operator()
 {
     OPERATOR_DEPLOY_FILE_DIR=${DEPLOY_FILE_DIR}/kubernetes/${CHART_VERSION}/operator-deploy
     kube_create_secret
-    ${OPERATOR_DEPLOY_FILE_DIR}/deploy.sh --tag=${CHART_VERSION} --operator-ns=${OPERATOR_NS} --cte-ns=${CSI_NS}
+    ${OPERATOR_DEPLOY_FILE_DIR}/deploy.sh --tag=${CHART_VERSION} --operator-ns=${OPERATOR_NS} --cte-ns=${CSI_NS} --sock=${CRISOCK}
 
     exit 0
 }
@@ -160,6 +160,19 @@ get_chart_version() {
     }'
 }
 
+# need to remove cte csi driver before upgrading from older charts without fsGroupPolicy set to "File"
+# otherwise upgrading will fail as fsGroupPolicy field is marked as immutable
+kube_fsgroup_upgrade_fix()
+{
+    FSGROUPPOLICY=`kubectl get csidriver csi.cte.cpl.thalesgroup.com -o=jsonpath="{.spec.fsGroupPolicy}" 2>/dev/null`
+    if [ $? -ne 0 ] || [ -z "$FSGROUPPOLICY" ]; then
+        return
+    fi
+    if [ "$FSGROUPPOLICY" != "File" ]; then
+        kubectl delete csidriver csi.cte.cpl.thalesgroup.com
+    fi
+}
+
 start()
 {
     check_exec kubectl
@@ -179,6 +192,10 @@ start()
         remove
     fi
 
+    kube_autodetect_crisocket
+    echo "Using CRISocket path:" ${CRISOCK}
+    EXTRA_OPTIONS="${EXTRA_OPTIONS} --set CRISocket=${CRISOCK}"
+
     if [[ ${OPERATOR} == "YES" ]]; then
         install_operator
     fi
@@ -187,12 +204,10 @@ start()
 
     kube_create_secret
 
-    kube_autodetect_crisocket
-    echo "Using CRISocket path:" ${CRISOCK}
-    EXTRA_OPTIONS="${EXTRA_OPTIONS} --set CRISocket=${CRISOCK}"
-
     echo "Deploying $CSI_DEPLOYMENT_NAME using helm chart..."
     cd "${DEPLOY_FILE_DIR}/kubernetes"
+
+    kube_fsgroup_upgrade_fix
 
     # "upgrade --install" will install if no prioir install exists, else upgrade
     if [ ! -v HELM_CMD ]; then
