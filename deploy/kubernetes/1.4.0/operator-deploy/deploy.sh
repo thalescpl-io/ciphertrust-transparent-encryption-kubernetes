@@ -240,7 +240,7 @@ deploy_cte_csi()
         # TBD TBD TBD TBD
         # The "source" will change to "community-operators" once the catalog is published for K8s
         # TBD TBD TBD TBD
-        sed -i s/"^  source: .*"/"  source: ctek8soperator-catalog"/g ${DEPLOY_SCRIPT_PATH}/ctek8soperator-subscription.yaml
+        sed -i s/"^  source: .*"/"  source: operatorhubio-catalog"/g ${DEPLOY_SCRIPT_PATH}/ctek8soperator-subscription.yaml
         sed -i s/"^  sourceNamespace: .*"/"  sourceNamespace: olm"/g ${DEPLOY_SCRIPT_PATH}/ctek8soperator-subscription.yaml
     fi
 
