@@ -24,3 +24,7 @@ spec:
     - name: cri-sock
       hostPath:
         path: "/run/crio/crio.sock"
+  # the following parameters are optional. If values are not specified, default values would be taken
+  csiProvisionerImage: registry.k8s.io/sig-storage/csi-provisioner:v3.1.0
+  csiNodeDriverRegistrarImage: k8s.gcr.io/sig-storage/csi-node-driver-registrar:v2.0.1
+  csiAttacherImage: k8s.gcr.io/sig-storage/csi-attacher:v3.0.0

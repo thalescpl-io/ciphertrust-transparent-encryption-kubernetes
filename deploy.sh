@@ -12,7 +12,7 @@ DEPLOY_FILE_DIR=deploy
 IMAGE_PULL_SECRET="cte-csi-secret"
 
 # Default namespaces for operator deployment
-OPERATOR=NO
+OPERATOR=YES
 OPR_NS_ARG=0
 CSI_NS_ARG=0
 OPERATOR_NS="kube-system"
@@ -20,6 +20,7 @@ CSI_NS="kube-system"
 
 kube_create_secret()
 {
+    DEPLOY_NAMESPACE=$1
     # Skip if User or Password not set
     if [ -z "${USER}" ] || [ -z "${PASSWD}" ] || [ -z "${SERVER}" ]; then
         return
@@ -58,13 +59,17 @@ remove()
         if [ -x "$(command -v helm)" ]; then
             helm list -q --all-namespaces 2>/dev/null | grep -q cte-csi-deployment
             if [ $? -eq 0 ]; then
-                echo "Error: CTE for Kubernetes was installed using helm. Try --remove without the --operator parameter"
+                echo "Error: CTE for Kubernetes was installed using helm. Try --remove with the --helm parameter [and remove --operator/-o if added]"
                 exit 1
             fi
         fi
 
         OPERATOR_DEPLOY_FILE_DIR=${DEPLOY_FILE_DIR}/kubernetes/${CHART_VERSION}/operator-deploy
         ${OPERATOR_DEPLOY_FILE_DIR}/deploy.sh --tag=${CHART_VERSION} --operator-ns=${OPERATOR_NS} --cte-ns=${CSI_NS} --remove
+        kubectl get secrets ${IMAGE_PULL_SECRET} --namespace=${CSI_NS} > /dev/null 2>&1
+        if [ $? -eq 0 ]; then
+            kubectl delete secrets ${IMAGE_PULL_SECRET} --namespace=${CSI_NS} 2> /dev/null
+        fi
         exit 0
     fi
 
@@ -77,8 +82,12 @@ remove()
         fi
     fi
 
+    DEPLOY_NAMESPACE=$(grep namespace deploy/kubernetes/${CHART_VERSION}/values.yaml | sed -e s/[" "\"]//g | cut -d":" -f2)
     if [[ "${REMOVE}" == "YES" ]]; then
-        kubectl delete secrets ${IMAGE_PULL_SECRET} --namespace=${DEPLOY_NAMESPACE} 2> /dev/null
+        kubectl get secrets ${IMAGE_PULL_SECRET} --namespace=${DEPLOY_NAMESPACE} > /dev/null 2>&1
+        if [ $? -eq 0 ]; then
+            kubectl delete secrets ${IMAGE_PULL_SECRET} --namespace=${DEPLOY_NAMESPACE} 2> /dev/null
+        fi
     fi
 
     helm delete --namespace=${DEPLOY_NAMESPACE} ${CSI_DEPLOYMENT_NAME} 2> /dev/null
@@ -136,8 +145,17 @@ kube_autodetect_crisocket()
 
 install_operator()
 {
+    if [ -x "$(command -v helm)" ]; then
+        helm list -q --all-namespaces 2>/dev/null | grep -q cte-csi-deployment
+        if [ $? -eq 0 ]; then
+            echo "Error: CTE for Kubernetes was installed using helm. Please refer to the"
+            echo "CTE-K8s user guide, for steps to migrate from Helm to Operator based deployment"
+            exit 1
+        fi
+    fi
+
     OPERATOR_DEPLOY_FILE_DIR=${DEPLOY_FILE_DIR}/kubernetes/${CHART_VERSION}/operator-deploy
-    kube_create_secret
+    kube_create_secret ${CSI_NS}
     ${OPERATOR_DEPLOY_FILE_DIR}/deploy.sh --tag=${CHART_VERSION} --operator-ns=${OPERATOR_NS} --cte-ns=${CSI_NS} --sock=${CRISOCK}
 
     exit 0
@@ -196,18 +214,22 @@ start()
     echo "Using CRISocket path:" ${CRISOCK}
     EXTRA_OPTIONS="${EXTRA_OPTIONS} --set CRISocket=${CRISOCK}"
 
+    kube_fsgroup_upgrade_fix
+
     if [[ ${OPERATOR} == "YES" ]]; then
         install_operator
     fi
 
     check_exec helm
 
-    kube_create_secret
+    # Get the namespace for deploying CTE-K8s from values.yaml. It could be of form
+    # namespace: "kube-system" or namespace: kube-system
+    # convert it to form namespace:kube-system, then split on colon
+    DEPLOY_NAMESPACE=$(grep namespace deploy/kubernetes/${CHART_VERSION}/values.yaml | sed -e s/[" "\"]//g | cut -d":" -f2)
+    kube_create_secret ${DEPLOY_NAMESPACE}
 
     echo "Deploying $CSI_DEPLOYMENT_NAME using helm chart..."
     cd "${DEPLOY_FILE_DIR}/kubernetes"
-
-    kube_fsgroup_upgrade_fix
 
     # "upgrade --install" will install if no prioir install exists, else upgrade
     if [ ! -v HELM_CMD ]; then
@@ -237,7 +259,7 @@ usage()
 
 # main
 
-L_OPTS="server:,user:,passwd:,tag:,remove,help,operator-ns:,cte-ns:,operator,cri-sock:"
+L_OPTS="server:,user:,passwd:,tag:,remove,help,operator-ns:,cte-ns:,operator,cri-sock:,helm"
 S_OPTS="s:u:p:t:rho"
 options=$(getopt -a -l ${L_OPTS} -o ${S_OPTS} -- "$@")
 if [ $? -ne 0 ]; then
@@ -283,12 +305,15 @@ while true ; do
        --cte-ns)
             CSI_NS_ARG=1
             CSI_NS=${2}
-            DEPLOY_NAMESPACE=${2}
             shift 2
             ;;
        --cri-sock)
             CRISOCK=${2}
             shift 2
+            ;;
+       --helm)
+            OPERATOR="NO"
+            shift
             ;;
         --)
             shift

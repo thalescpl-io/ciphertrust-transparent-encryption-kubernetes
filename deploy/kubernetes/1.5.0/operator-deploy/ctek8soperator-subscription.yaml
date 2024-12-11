@@ -7,5 +7,5 @@ spec:
   channel: stable
   installPlanApproval: Automatic
   name: cte-k8s-operator
-  source: certified-operators
-  sourceNamespace: openshift-marketplace
+  source: ctek8soperator-catalog
+  sourceNamespace: kube-system

@@ -6,9 +6,9 @@ CTEK8S_NS_SUPPLIED=0
 CLEANUP=0
 DEPLOY_SCRIPT_PATH=""
 
-ECHO="/usr/bin/echo -e"
-AWK="/usr/bin/awk"
-GREP="/usr/bin/grep"
+ECHO="echo -e"
+AWK="awk"
+GREP="grep"
 
 #The top level deploy script has already checked for kubectl command.
 IS_OCP=`kubectl api-resources | awk -F' ' '{ print $2 }' | grep route.openshift.io | wc -l`
@@ -28,7 +28,7 @@ chk_pkgs()
 print_msg()
 {
     if [ ${SILENT_INSTALL} -ne 1 ]; then
-        /usr/bin/echo $1
+        echo $1
     fi
 }
 
@@ -53,6 +53,9 @@ parse_cmdline()
                 ;;
             --remove)
                 CLEANUP=1
+                ;;
+            --sock=*)
+                CRISOCK="${i#*=}"
                 ;;
             --tag=*)
                 CSI_TAG="${i#*=}"
@@ -234,9 +237,6 @@ deploy_cte_csi()
         # Tell kubectl to ignore validation of the manifest if deploying on Kubernetes
         VALIDATE="--validate=false"
         # the catalog for CteK8sOperator is deployed differently on Kubernetes. Adjust the yaml file
-        # TBD TBD TBD TBD
-        # The "source" will change to "operatorhubio-catalog" once the catalog is published for K8s
-        # TBD TBD TBD TBD
         sed -i s/"^  source: .*"/"  source: operatorhubio-catalog"/g ${DEPLOY_SCRIPT_PATH}/ctek8soperator-subscription.yaml
         sed -i s/"^  sourceNamespace: .*"/"  sourceNamespace: olm"/g ${DEPLOY_SCRIPT_PATH}/ctek8soperator-subscription.yaml
     fi
@@ -264,10 +264,11 @@ deploy_cte_csi()
 	if [ "x${OPR_STATUS}" = "xRunning" ] || [ $loop_ctr -eq 60 ]; then
 		${ECHO} "."
 		break
+        # Continue until either 60s have elapsed or status of the controller manager pod has changed to Running
 	else
             ${ECHO} -n "."
             sleep 1
-	    if [ "x${OPR_STATUS}" = "xRunning" ]; then
+	    if [ "x${OPR_STATUS}" != "xRunning" ]; then
                 (( loop_ctr++ ))
             fi
 	fi
@@ -283,16 +284,70 @@ deploy_cte_csi()
     ${ECHO} "Successfully installed CipherTrust Transparent Encryption for Kubernetes Operator"
     ${ECHO} "Deploying CipherTrust Transparent Encryption for Kubernetes"
 
-    sleep 10
+    # Wait for the ctek8soperator Custom Resource Definition to get registered with K8s, before deploying CTE-CSI.
+    ${ECHO} -n "Waiting for the ctek8soperator CRD to get registered with K8s."
+    loop_ctr=0
+    while :
+    do
+	${ECHO} -n "."
+	${OC_KUBECTL_CMD} api-resources --api-group=cte-k8s-operator.csi.cte.cpl.thalesgroup.com | grep -w CteK8sOperator > /dev/null 2>&1
+	if [ $? = 0 ]; then
+		break
+	fi
+	if [ ${loop_ctr} -eq 300 ]; then
+		${ECHO} "\nError to get ctek8soperator CRD. Not registered with K8s. Retry Deploying."
+		exit 1
+	fi
+	(( loop_ctr++ ))
+	sleep 1
+    done
+    ${ECHO} "\nSuccessfully registered ctek8soperator CRD with K8s"
+
+    ${ECHO} -n "Waiting for ctek8soperator controller manager to get ready."
+    loop_ctr=0
+    while :
+    do
+	${ECHO} -n "."
+	${OC_KUBECTL_CMD} get deployment.apps/cte-k8s-operator-controller-manager -n ${OPR_NS} -o yaml | grep -i status | grep -i false > /dev/null 2>&1
+	if [ $? = 1 ]; then
+		break
+	fi
+	if [ ${loop_ctr} -eq 120 ]; then
+		${ECHO} "\nError ctek8soperator controller manager is not up. Retry Deploying."
+		exit 1
+	fi
+	(( loop_ctr++ ))
+	sleep 1
+    done
+    ${ECHO} "\nctek8soperator controller manager is ready"
+
+
+    # Update the CRD file with the CRI Socket info that is autodetected
+    # Escape the "/" in the sock path so that sed processes it correctly while updating the CRD
+    CRISOCK=`echo ${CRISOCK} | sed  's#\/#\\\/#g'`
+    sed -i s/"        path: \"\/run.*"/"        path: ${CRISOCK}"/g  ${DEPLOY_SCRIPT_PATH}/ctek8soperator-crd.yaml
+
     ${OC_KUBECTL_CMD} apply -f ${DEPLOY_SCRIPT_PATH}/ctek8soperator-crd.yaml -n ${CTEK8S_NS}
     if [ $? -ne 0 ]; then
         ${ECHO} "Error deploying CipherTrust Transparent Encryption for Kubernetes"
         exit 1
     fi
 
-    # Wait for 10s to get the pods status
-    sleep 10
-    ${ECHO} "=========================================================================================="
+    # Wait for cte-csi pods to get installed
+    ${ECHO} -n "Waiting for CipherTrust Transparent Encryption for Kubernetes."
+    loop_ctr=0
+    while :
+    do
+	${ECHO} -n "."
+	${OC_KUBECTL_CMD} get pods -n ${CTEK8S_NS} | grep cte-csi > /dev/null 2>&1
+	if [ $? = 0 ] || [ ${loop_ctr} -eq 10 ]; then
+		break
+	fi
+	(( loop_ctr++ ))
+	sleep 1
+    done
+
+    ${ECHO} "\n=========================================================================================="
     ${ECHO} "CipherTrust Transparent Encryption for Kubernetes Operator deployed in namespace ${OPR_NS}"
     ${ECHO} "CipherTrust Transparent Encryption for Kubernetes in namespace ${CTEK8S_NS}"
     ${OC_KUBECTL_CMD} get pods -n ${CTEK8S_NS} | grep cte-csi
@@ -322,12 +377,18 @@ cleanup_deployment()
         read CTEK8S_NS
     done
 
+    ${ECHO} "=========================================================================================="
+    ${ECHO} "Deleting CTE-K8s Operator resources in namespace: ${OPR_NS}"
+    ${ECHO} "Deleting CTE-K8s  resources in namespace: ${CTEK8S_NS}"
+    ${ECHO} "=========================================================================================="
+
     ${OC_KUBECTL_CMD} delete CteK8sOperator ctek8soperator -n ${CTEK8S_NS}
     CSV=`${OC_KUBECTL_CMD} get subscription ctek8soperator-sub -n ${OPR_NS} -o yaml | ${AWK} '/currentCSV/ {print $2}'`
     ${OC_KUBECTL_CMD} delete subscription ctek8soperator-sub -n ${OPR_NS}
     ${OC_KUBECTL_CMD} delete clusterserviceversion ${CSV} -n ${OPR_NS}
     ${OC_KUBECTL_CMD} delete og ctek8soperator-og -n ${OPR_NS}
     ${OC_KUBECTL_CMD} delete sa cte-k8s-operator-cte-csi-controller cte-k8s-operator-cte-csi-node -n ${OPR_NS}
+    ${OC_KUBECTL_CMD} delete sa cte-csi-controller cte-csi-node -n ${CTEK8S_NS}
     ${OC_KUBECTL_CMD} delete ClusterRole cte-csi-controller-ac cte-csi-node-ac
     ${OC_KUBECTL_CMD} delete ClusterRoleBinding cte-csi-controller-binding cte-csi-node-binding
     ${OC_KUBECTL_CMD} delete customresourcedefinition.apiextensions.k8s.io/ctek8soperators.cte-k8s-operator.csi.cte.cpl.thalesgroup.com

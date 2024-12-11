@@ -1,12 +1,19 @@
 ---
+apiVersion: storage.k8s.io/v1
+kind: CSIDriver
+metadata:
+      name: csi.cte.cpl.thalesgroup.com
+spec:
+      podInfoOnMount: true
+      fsGroupPolicy: File
+---
 kind: Deployment
 apiVersion: apps/v1
 metadata:
   name: cte-csi-controller
-  namespace: "{{ .Values.namespace }}"
+  namespace: {{ .Values.namespace }}
 spec:
   replicas: {{ .Values.replicaCount }}
-  revisionHistoryLimit: 1
   selector:
     matchLabels:
       app: cte-csi-controller
@@ -29,6 +36,16 @@ spec:
         - key: "node-role.kubernetes.io/control-plane"
           operator: "Exists"
           effect: "NoSchedule"
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/arch
+                    operator: In
+                    values:
+                      - amd64
+                      - arm64
       volumes:
         - name: registration-dir
           hostPath:
@@ -45,10 +62,14 @@ spec:
             path: /etc/kubernetes/
             type: Directory
 
+        - name: dshm
+          emptyDir:
+            medium: Memory
+
       containers:
         - name: cte-csi
-          image: "{{ .Values.image.cteCsiImage }}:{{ .Values.image.tag }}"
-          imagePullPolicy: "{{ .Values.image.pullPolicy }}"
+          image: "{{ .Values.image.cteCsiImage }}:{{ .Values.image.cteCsiTag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
           lifecycle:
             preStop:
               exec:
@@ -59,6 +80,8 @@ spec:
             - "--namespace=$(KUBE_NAMESPACE)"
             - "--v={{ .Values.image.logLevel }}"
             - "--controller"
+            - "--apiburst={{ .Values.APIServerThrottle.burst }}"
+            - "--apiqps={{ .Values.APIServerThrottle.qps }}"
           env:
             - name: CSI_ENDPOINT
               value: unix:///csi/csi-controller.sock
@@ -82,14 +105,55 @@ spec:
             - name: kube-cred
               mountPath: /etc/kubernetes/
 
+        - name: cte-csi-signer
+          image: "{{ .Values.image.cteCsiImage }}:{{ .Values.image.cteCsiTag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "rm -rf /csi/csi-controller.sock"]
+          args:
+            - "--endpoint=$(CSI_ENDPOINT)"
+            - "--nodeid=$(KUBE_NODE_NAME)"
+            - "--namespace=$(KUBE_NAMESPACE)"
+            - "--v={{ .Values.image.logLevel }}"
+            - "--signer"
+            - "--apiburst={{ .Values.APIServerThrottle.burst }}"
+            - "--apiqps={{ .Values.APIServerThrottle.qps }}"
+          env:
+            - name: CSI_ENDPOINT
+              value: unix:///csi/csi-controller.sock
+            - name: KUBE_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: spec.nodeName
+            - name: KUBE_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          securityContext:
+            privileged: true
+            capabilities:
+              add:
+                - SYS_ADMIN
+          volumeMounts:
+            - name: plugin-dir
+              mountPath: /csi
+            - name: kube-cred
+              mountPath: /etc/kubernetes/
+            - name: dshm
+              mountPath: /dev/shm
+
         - name: csi-provisioner
-          image: k8s.gcr.io/sig-storage/csi-provisioner:v3.1.0
+          image: "{{ .Values.image.csiProvisionerImage }}"
           args:
             - "--v={{ .Values.image.logLevel }}"
             - "--csi-address=/csi/csi-controller.sock"
             - "--extra-create-metadata"
             - "--feature-gates=Topology=true"
             - "--leader-election"
+            - "--timeout=60s"
           securityContext:
             # This is necessary only for systems with SELinux, where
             # non-privileged sidecar containers cannot access unix domain socket
@@ -111,6 +175,26 @@ spec:
             - mountPath: /csi
               name: plugin-dir
 
+        - name: csi-snapshotter
+          image: "{{ .Values.csiSnapshotter.repository }}:{{ .Values.csiSnapshotter.tag }}"
+          imagePullPolicy: {{ .Values.csiSnapshotter.pullPolicy }}
+          args:
+            - "--v=2"
+            - "--csi-address=/csi/csi-controller.sock"
+            - "--leader-election-namespace=$(KUBE_NAMESPACE)"
+            - "--leader-election"
+            - "--timeout=120s"
+          env:
+            - name: KUBE_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          volumeMounts:
+            - mountPath: /csi
+              name: plugin-dir
+          securityContext:
+            privileged: true
+
         # - name: csi-sidecar-registrar
         #   image: k8s.gcr.io/sig-storage/csi-node-driver-registrar:v2.0.1
         #   args:
@@ -126,4 +210,4 @@ spec:
         #       mountPath: /registration
 
       imagePullSecrets:
-        - name: "{{ .Values.imagePullSecrets }}"
+        - name: {{ .Values.imagePullSecrets }}

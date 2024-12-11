@@ -135,7 +135,7 @@ spec:
               mountPath: /dev/shm
 
         - name: csi-provisioner
-          image: k8s.gcr.io/sig-storage/csi-provisioner:v3.1.0
+          image: "{{ .Values.image.csiProvisionerImage }}"
           args:
             - "--v={{ .Values.image.logLevel }}"
             - "--csi-address=/csi/csi-controller.sock"

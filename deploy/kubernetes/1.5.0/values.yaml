@@ -6,12 +6,20 @@ namespace: "kube-system"
 
 image:
   cteCsiImage: "docker.io/thalesciphertrust/ciphertrust-transparent-encryption-kubernetes"
-  cteCsiTag: "1.2.0-latest"
+  cteCsiTag: "1.5.0-latest"
   pullPolicy: Always
   logLevel: "1"
-  pauseImage: "k8s.gcr.io/pause:latest"
+  pauseImage: "registry.k8s.io/pause:3.9"
+  csiProvisionerImage: "registry.k8s.io/sig-storage/csi-provisioner:v4.0.0"
+  csiNodeDriverRegistrarImage: "k8s.gcr.io/sig-storage/csi-node-driver-registrar:v2.0.1"
+  csiAttacherImage: "k8s.gcr.io/sig-storage/csi-attacher:v3.3.0"
 
 imagePullSecrets: cte-csi-secret
+
+csiSnapshotter:
+        repository: registry.k8s.io/sig-storage/csi-snapshotter
+        tag: v6.3.3
+        pullPolicy: IfNotPresent
 
 APIServerThrottle:
   burst: 300

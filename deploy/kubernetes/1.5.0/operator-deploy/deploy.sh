@@ -11,7 +11,7 @@ AWK="awk"
 GREP="grep"
 
 #The top level deploy script has already checked for kubectl command.
-IS_OCP=`kubectl api-resources | awk -F' ' '{ print $2 }' | grep route.openshift.io | wc -l`
+IS_OCP=$(kubectl api-resources | awk -F' ' '{ print $2 }' | grep route.openshift.io | wc -l)
 chk_pkgs()
 {
     if [ ${IS_OCP} -ge 1 ]; then
@@ -19,9 +19,9 @@ chk_pkgs()
             echo "Error: Openshift CLI command 'oc' is not installed or not in PATH." >&2
             exit 1
         fi
-        OC_KUBECTL_CMD=`which oc`
+	OC_KUBECTL_CMD=$(which oc)
     else
-        OC_KUBECTL_CMD=`which kubectl`
+        OC_KUBECTL_CMD=$(which kubectl)
     fi
 }
 
@@ -175,48 +175,29 @@ create_rbac_objects()
     ${OC_KUBECTL_CMD} delete ClusterRole cte-csi-controller-ac cte-csi-node-ac > /dev/null 2>&1
     ${OC_KUBECTL_CMD} delete ClusterRoleBinding cte-csi-controller-binding cte-csi-node-binding > /dev/null 2>&1
 
-    # Create the rbac objects required for CTE-K8s in the NS supplied.
-    sed -i s/"namespace: .*"/"namespace: ${CTEK8S_NS}"/g ${DEPLOY_SCRIPT_PATH}/*rbac*.yaml
+    # Copy the RBAC manifests from the Helm Chart templates directory.
+    cp ${DEPLOY_SCRIPT_PATH}/../templates/rbac*.yaml ${DEPLOY_SCRIPT_PATH}
+    # The namespace field is templatized as "namespace: {{ .Values.namespace }}". Replace with user supplied value.
+    sed -i s/"namespace: .*"/"namespace: ${CTEK8S_NS}"/g ${DEPLOY_SCRIPT_PATH}/rbac*.yaml
 
-    ${OC_KUBECTL_CMD} apply -f ${DEPLOY_SCRIPT_PATH}/cte-csi-controller-rbac-sa.yaml -n ${CTEK8S_NS}
+    ${OC_KUBECTL_CMD} apply -f ${DEPLOY_SCRIPT_PATH}/rbac-cte-csi-controller.yaml -n ${CTEK8S_NS}
     if [ $? -ne 0 ]; then
-        ${ECHO} "Error creating ServiceAccount: cte-csi-controller in namespace ${CTEK8S_NS}"
+        ${ECHO} "Error creating RBAC for cte-csi-controller in namespace ${CTEK8S_NS}"
         exit 1
     fi
 
-    ${OC_KUBECTL_CMD} apply -f ${DEPLOY_SCRIPT_PATH}/cte-csi-controller-rbac-role.yaml -n ${CTEK8S_NS}
+    ${OC_KUBECTL_CMD} apply -f ${DEPLOY_SCRIPT_PATH}/rbac-cte-csi-nodeserver.yaml -n ${CTEK8S_NS}
     if [ $? -ne 0 ]; then
-        ${ECHO} "Error creating ClusterRole: cte-csi-controller-ac in namespace ${CTEK8S_NS}"
+        ${ECHO} "Error creating RBAC for cte-csi-node in namespace ${CTEK8S_NS}"
         exit 1
     fi
 
-    ${OC_KUBECTL_CMD} apply -f ${DEPLOY_SCRIPT_PATH}/cte-csi-controller-rbac-role-binding.yaml -n ${CTEK8S_NS}
-    if [ $? -ne 0 ]; then
-        ${ECHO} "Error creating ClusterRoleBinding: cte-csi-controller-binding in namespace ${CTEK8S_NS}"
-        exit 1
-    fi
+    # Discard the RBAC manifests copied from the Helm Chart templates directory.
+    rm -f ${DEPLOY_SCRIPT_PATH}/rbac-*.yaml
 
-    ${OC_KUBECTL_CMD} apply -f ${DEPLOY_SCRIPT_PATH}/cte-csi-nodeserver-rbac-sa.yaml -n ${CTEK8S_NS}
-    if [ $? -ne 0 ]; then
-        ${ECHO} "Error creating ServiceAccount: cte-csi-node in namespace ${CTEK8S_NS}"
-        exit 1
-    fi
-
-    ${OC_KUBECTL_CMD} apply -f ${DEPLOY_SCRIPT_PATH}/cte-csi-nodeserver-rbac-role.yaml -n ${CTEK8S_NS}
-    if [ $? -ne 0 ]; then
-        ${ECHO} "Error creating ClusterRole: cte-csi-node-ac in namespace ${CTEK8S_NS}"
-        exit 1
-    fi
-
-    ${OC_KUBECTL_CMD} apply -f ${DEPLOY_SCRIPT_PATH}/cte-csi-nodeserver-rbac-role-binding.yaml -n ${CTEK8S_NS}
-    if [ $? -ne 0 ]; then
-        ${ECHO} "Error creating ClusterRoleBinding: cte-csi-node-binding in namespace ${CTEK8S_NS}"
-        exit 1
-    fi
-
-    # if Operator is not deployed in kube-system NS, then we need to define a Security Context that can be
+    # if CTE-K8s is not deployed in kube-system NS, then we need to define a Security Context that can be
     # used by the RBAC accounts created above.
-    if [ ${IS_OCP} -eq 1 ] && [ "x${OPR_NS}" != "xkube-system" ]
+    if [ ${IS_OCP} -eq 1 ] && [ "x${CTEK8S_NS}" != "xkube-system" ]
     then
         ${OC_KUBECTL_CMD} apply -f ${DEPLOY_SCRIPT_PATH}/cte-csi-scc.yaml
         if [ $? -ne 0 ]; then
@@ -237,8 +218,25 @@ deploy_cte_csi()
         # Tell kubectl to ignore validation of the manifest if deploying on Kubernetes
         VALIDATE="--validate=false"
         # the catalog for CteK8sOperator is deployed differently on Kubernetes. Adjust the yaml file
-        sed -i s/"^  source: .*"/"  source: operatorhubio-catalog"/g ${DEPLOY_SCRIPT_PATH}/ctek8soperator-subscription.yaml
-        sed -i s/"^  sourceNamespace: .*"/"  sourceNamespace: olm"/g ${DEPLOY_SCRIPT_PATH}/ctek8soperator-subscription.yaml
+#        sed -i s/"^  source: .*"/"  source: operatorhubio-catalog"/g ${DEPLOY_SCRIPT_PATH}/ctek8soperator-subscription.yaml
+#        sed -i s/"^  sourceNamespace: .*"/"  sourceNamespace: olm"/g ${DEPLOY_SCRIPT_PATH}/ctek8soperator-subscription.yaml
+
+	# Make catalog source point to our dockerhub image location
+	DOCKER_LOC="docker.io/thalesciphertrust/ciphertrust-transparent-encryption-kubernetes-operator-catalog:v1.2.5"
+	ESCAPED_DOCKER_LOC=`echo ${DOCKER_LOC} | sed  's#\/#\\\/#g'`
+        sed -i s/"^  image: .*"/"  image: ${ESCAPED_DOCKER_LOC}"/g ${DEPLOY_SCRIPT_PATH}/ctek8soperator-catsrc.yaml
+
+	# Check if cte-k8s-operator is already installed, if found, remove it. It is safe to do so. Does not affect CSI deployment
+	IS_OPR_INSTALLED=$(${OC_KUBECTL_CMD} get operators cte-k8s-operator.kube-system 2>/dev/null | wc -l)
+	if [ ${IS_OPR_INSTALLED} -eq 2 ]; then
+		${OC_KUBECTL_CMD} delete operator cte-k8s-operator.kube-system
+	fi
+	# Create catalog for our operator from image on dockerhub
+	${OC_KUBECTL_CMD} apply -f ${DEPLOY_SCRIPT_PATH}/ctek8soperator-catsrc.yaml
+
+	# Make our subscription point to our custom catalog in the kube-system namespace
+        sed -i s/"^  source: .*"/"  source: ctek8soperator-catalog"/g ${DEPLOY_SCRIPT_PATH}/ctek8soperator-subscription.yaml
+        sed -i s/"^  sourceNamespace: .*"/"  sourceNamespace: kube-system"/g ${DEPLOY_SCRIPT_PATH}/ctek8soperator-subscription.yaml
     fi
 
     sed -i s/"namespace: .*"/"namespace: ${OPR_NS}"/g ${DEPLOY_SCRIPT_PATH}/ctek8soperator-subscription.yaml
@@ -249,7 +247,7 @@ deploy_cte_csi()
         exit 1
     fi
 
-    ${OC_KUBECTL_CMD} apply -f ${DEPLOY_SCRIPT_PATH}/ctek8soperator-subscription.yaml -n ${OPR_NS} ${VALIDATE}
+    ${OC_KUBECTL_CMD} apply -f ${DEPLOY_SCRIPT_PATH}/ctek8soperator-subscription.yaml ${VALIDATE}
     if [ $? -ne 0 ]; then
         ${ECHO} "Error creating Subscription: ctek8soperator-sub"
         exit 1
@@ -260,7 +258,7 @@ deploy_cte_csi()
     loop_ctr=0
     while :
     do
-	OPR_STATUS=`${OC_KUBECTL_CMD} get pods -n ${OPR_NS} 2>/dev/null | awk '/cte-k8s-operator-controller-manager/ { print $3 }'`
+        OPR_STATUS=$(${OC_KUBECTL_CMD} get pods -n ${OPR_NS} 2>/dev/null | awk '/cte-k8s-operator-controller-manager/ { print $3 }')
 	if [ "x${OPR_STATUS}" = "xRunning" ] || [ $loop_ctr -eq 60 ]; then
 		${ECHO} "."
 		break
@@ -275,9 +273,23 @@ deploy_cte_csi()
 	sleep 1
     done
 
+    # If the CTE-K8s Operator did not start correctly look for logs. If the CTE-K8s Operator Controller pod itself dis not start
+    # then look for the OLM operator controller pod logs for log messages for troubleshooting
     if [ "x${OPR_STATUS}" != "xRunning" ] ; then
-        OPR_POD=`${OC_KUBECTL_CMD} get pods -n ${OPR_NS} 2>/dev/null | awk '/cte-k8s-operator-controller-manager/ { print $1 }'`
-        ${ECHO} "Error installing operator. To check the logs run \n\n\t ${OC_KUBECTL_CMD} logs ${OPR_POD} -n ${OPR_NS}\n"
+        OPR_POD=$(${OC_KUBECTL_CMD} get pods -n ${OPR_NS} 2>/dev/null | awk '/cte-k8s-operator-controller-manager/ { print $1 }')
+        if [ -n ${OPR_POD} ]; then
+            ${ECHO} "Error installing operator. To check the logs run \n\n\t ${OC_KUBECTL_CMD} logs ${OPR_POD} -n ${OPR_NS}\n"
+	else
+            if [ ${IS_OCP} -ge 1 ]; then
+                NS="openshift-operator-lifecycle-manager"
+            else
+                NS="olm"
+            fi
+            OPR_POD=$(${OC_KUBECTL_CMD} get pods -n ${NS} 2>/dev/null | awk '/olm-operator/  { print $1 }')
+            ${ECHO} "Error installing operator. To check the logs run \n\n\t ${OC_KUBECTL_CMD} logs ${OPR_POD} -n ${NS} | grep cte-k8s\n"
+            ${ECHO} "Also check if the subscription, install-plan and cte-k8s-operator CSV have been created correctly. Run the command"
+            ${ECHO} " \n\n\t ${OC_KUBECTL_CMD} get sub,ip,csv -n ${OPR_NS}\n"
+        fi
         exit 1
     fi
 
@@ -324,7 +336,7 @@ deploy_cte_csi()
 
     # Update the CRD file with the CRI Socket info that is autodetected
     # Escape the "/" in the sock path so that sed processes it correctly while updating the CRD
-    CRISOCK=`echo ${CRISOCK} | sed  's#\/#\\\/#g'`
+    CRISOCK=$(echo ${CRISOCK} | sed  's#\/#\\\/#g')
     sed -i s/"        path: \"\/run.*"/"        path: ${CRISOCK}"/g ${DEPLOY_SCRIPT_PATH}/ctek8soperator-crd.yaml
 
     ${OC_KUBECTL_CMD} apply -f ${DEPLOY_SCRIPT_PATH}/ctek8soperator-crd.yaml -n ${CTEK8S_NS}
@@ -357,7 +369,7 @@ deploy_cte_csi()
 cleanup_deployment()
 {
     # Bail out if any application is using CTE K8s Volume(s)
-    pod_count=`${OC_KUBECTL_CMD} get pods --all-namespaces | ${GREP} "cte-staging-pod" | wc -l`
+    pod_count=$(${OC_KUBECTL_CMD} get pods --all-namespaces | ${GREP} "cte-staging-pod" | wc -l)
     if [ $pod_count -ge 1 ]; then
 
         ${ECHO} "                    !!! WARNING !!!"
@@ -382,22 +394,24 @@ cleanup_deployment()
     ${ECHO} "Deleting CTE-K8s  resources in namespace: ${CTEK8S_NS}"
     ${ECHO} "=========================================================================================="
 
-    ${OC_KUBECTL_CMD} delete CteK8sOperator ctek8soperator -n ${CTEK8S_NS}
-    CSV=`${OC_KUBECTL_CMD} get subscription ctek8soperator-sub -n ${OPR_NS} -o yaml | ${AWK} '/currentCSV/ {print $2}'`
-    ${OC_KUBECTL_CMD} delete subscription ctek8soperator-sub -n ${OPR_NS}
-    ${OC_KUBECTL_CMD} delete clusterserviceversion ${CSV} -n ${OPR_NS}
+    ${OC_KUBECTL_CMD} delete -f ${DEPLOY_SCRIPT_PATH}/ctek8soperator-crd.yaml -n ${CTEK8S_NS}
+    CSV=$(${OC_KUBECTL_CMD} get subscription ctek8soperator-sub -n ${OPR_NS} -o yaml | ${AWK} '/currentCSV/ {print $2}')
+    ${OC_KUBECTL_CMD} delete -f ${DEPLOY_SCRIPT_PATH}/ctek8soperator-subscription.yaml -n ${OPR_NS}
+    ${OC_KUBECTL_CMD} delete csv ${CSV} -n ${OPR_NS}
     ${OC_KUBECTL_CMD} delete og ctek8soperator-og -n ${OPR_NS}
     ${OC_KUBECTL_CMD} delete sa cte-k8s-operator-cte-csi-controller cte-k8s-operator-cte-csi-node -n ${OPR_NS}
     ${OC_KUBECTL_CMD} delete sa cte-csi-controller cte-csi-node -n ${CTEK8S_NS}
     ${OC_KUBECTL_CMD} delete ClusterRole cte-csi-controller-ac cte-csi-node-ac
     ${OC_KUBECTL_CMD} delete ClusterRoleBinding cte-csi-controller-binding cte-csi-node-binding
     ${OC_KUBECTL_CMD} delete customresourcedefinition.apiextensions.k8s.io/ctek8soperators.cte-k8s-operator.csi.cte.cpl.thalesgroup.com
-    ${OC_KUBECTL_CMD} delete operator.operators.coreos.com/cte-k8s-operator.${OPR_NS}
     ${OC_KUBECTL_CMD} delete csidriver csi.cte.cpl.thalesgroup.com
-    if [ ${IS_OCP} -eq 1 ] && [ "x${OPR_NS}" != "xkube-system" ]
+    if [ ${IS_OCP} -eq 1 ] && [ "x${CTEK8S_NS}" != "xkube-system" ]
     then
         ${OC_KUBECTL_CMD} delete scc cte-csi-scc
     fi
+    ${OC_KUBECTL_CMD} delete clusterrole.rbac.authorization.k8s.io/cte-k8s-operator-metrics-reader >/dev/null 2>&1
+    ${OC_KUBECTL_CMD} delete rolebinding cte-k8s-operator-controller-manager-service-auth-reader -n ${CTEK8S_NS} >/dev/null 2>&1
+    ${OC_KUBECTL_CMD} delete operator.operators.coreos.com/cte-k8s-operator.${OPR_NS}
 }
 
 chk_pkgs

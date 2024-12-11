@@ -136,7 +136,7 @@ spec:
               mountPath: /chroot
 
         - name: csi-sidecar-registrar
-          image: k8s.gcr.io/sig-storage/csi-node-driver-registrar:v2.0.1
+          image: "{{ .Values.image.csiNodeDriverRegistrarImage }}"
           args:
             - "--csi-address=/csi/csi.sock"
             - "--kubelet-registration-path=/var/lib/kubelet/plugins/csi.cte.cpl.thalesgroup.com/csi.sock"
@@ -150,7 +150,7 @@ spec:
               mountPath: /registration
 
         - name: csi-sidecar-attacher
-          image: k8s.gcr.io/sig-storage/csi-attacher:v3.0.0
+          image: "{{ .Values.image.csiAttacherImage }}"
           args:
             - "--csi-address=/csi/csi.sock"
             - "--v={{ .Values.image.logLevel }}"
