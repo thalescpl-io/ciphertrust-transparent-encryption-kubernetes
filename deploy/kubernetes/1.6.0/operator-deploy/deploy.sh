@@ -218,8 +218,25 @@ deploy_cte_csi()
         # Tell kubectl to ignore validation of the manifest if deploying on Kubernetes
         VALIDATE="--validate=false"
         # the catalog for CteK8sOperator is deployed differently on Kubernetes. Adjust the yaml file
-        sed -i s/"^  source: .*"/"  source: operatorhubio-catalog"/g ${DEPLOY_SCRIPT_PATH}/ctek8soperator-subscription.yaml
-        sed -i s/"^  sourceNamespace: .*"/"  sourceNamespace: olm"/g ${DEPLOY_SCRIPT_PATH}/ctek8soperator-subscription.yaml
+#        sed -i s/"^  source: .*"/"  source: operatorhubio-catalog"/g ${DEPLOY_SCRIPT_PATH}/ctek8soperator-subscription.yaml
+#        sed -i s/"^  sourceNamespace: .*"/"  sourceNamespace: olm"/g ${DEPLOY_SCRIPT_PATH}/ctek8soperator-subscription.yaml
+
+	# Make catalog source point to our dockerhub image location
+	DOCKER_LOC="docker.io/thalesciphertrust/ciphertrust-transparent-encryption-kubernetes-operator-catalog:v1.2.5"
+	ESCAPED_DOCKER_LOC=`echo ${DOCKER_LOC} | sed  's#\/#\\\/#g'`
+        sed -i s/"^  image: .*"/"  image: ${ESCAPED_DOCKER_LOC}"/g ${DEPLOY_SCRIPT_PATH}/ctek8soperator-catsrc.yaml
+
+	# Check if cte-k8s-operator is already installed, if found, remove it. It is safe to do so. Does not affect CSI deployment
+	IS_OPR_INSTALLED=$(${OC_KUBECTL_CMD} get operators cte-k8s-operator.kube-system 2>/dev/null | wc -l)
+	if [ ${IS_OPR_INSTALLED} -eq 2 ]; then
+		${OC_KUBECTL_CMD} delete operator cte-k8s-operator.kube-system
+	fi
+	# Create catalog for our operator from image on dockerhub
+	${OC_KUBECTL_CMD} apply -f ${DEPLOY_SCRIPT_PATH}/ctek8soperator-catsrc.yaml
+
+	# Make our subscription point to our custom catalog in the kube-system namespace
+        sed -i s/"^  source: .*"/"  source: ctek8soperator-catalog"/g ${DEPLOY_SCRIPT_PATH}/ctek8soperator-subscription.yaml
+        sed -i s/"^  sourceNamespace: .*"/"  sourceNamespace: kube-system"/g ${DEPLOY_SCRIPT_PATH}/ctek8soperator-subscription.yaml
     fi
 
     sed -i s/"namespace: .*"/"namespace: ${OPR_NS}"/g ${DEPLOY_SCRIPT_PATH}/ctek8soperator-subscription.yaml
