@@ -10,6 +10,7 @@ DEPLOY_NAMESPACE="kube-system"
 DEPLOY_FILE_DIR=deploy
 
 IMAGE_PULL_SECRET="cte-csi-secret"
+CSI_DRIVER_CONFIGMAP="cte-k8s-config"
 
 # Default namespaces for operator deployment
 OPERATOR=YES
@@ -87,6 +88,10 @@ remove()
         kubectl get secrets ${IMAGE_PULL_SECRET} --namespace=${DEPLOY_NAMESPACE} > /dev/null 2>&1
         if [ $? -eq 0 ]; then
             kubectl delete secrets ${IMAGE_PULL_SECRET} --namespace=${DEPLOY_NAMESPACE} 2> /dev/null
+        fi
+        kubectl get cm ${CSI_DRIVER_CONFIGMAP} --namespace=${DEPLOY_NAMESPACE} > /dev/null 2>&1
+        if [ $? -eq 0 ]; then
+            kubectl delete cm ${CSI_DRIVER_CONFIGMAP} --namespace=${DEPLOY_NAMESPACE} 2> /dev/null
         fi
     fi
 
